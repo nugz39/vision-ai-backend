@@ -1,22 +1,35 @@
-﻿FROM python:3.11-slim
+# Use slim image for smaller/faster builds
+FROM python:3.11-slim
 
-ENV PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+# Avoid debconf TTY prompts and speed up apt
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HF_HOME=/cache/hf \
+    HUGGINGFACE_HUB_CACHE=/cache/hf \
+    HF_HUB_ENABLE_HF_TRANSFER=1
 
-# OS deps
-RUN apt-get update && apt-get install -y --no-install-recommends git ffmpeg curl && rm -rf /var/lib/apt/lists/*
+# System deps (git for models, ffmpeg for video/enc, curl for health/debug)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git ffmpeg curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Make cache dir world-writable so Space runner can populate it
+RUN mkdir -p /cache/hf && chmod -R 777 /cache
 
 WORKDIR /app
-COPY requirements.txt /app/requirements.txt
 
-# CPU torch first, then the rest
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
- && pip install --no-cache-dir -r /app/requirements.txt
+# Layered dependency install
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . /app
+# App code
+COPY . .
 
-# Default port; Spaces will inject PORT=7860 automatically
-ENV PORT=8000
-EXPOSE 8000
+# Healthcheck (Space honors PORT)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=5 \
+  CMD curl -fsS http://127.0.0.1:${PORT:-7860}/healthz || exit 1
 
-CMD ["sh","-lc","python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Start server
+CMD ["bash", "start.sh"]
